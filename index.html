@@ -8,7 +8,7 @@
     content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0"
   >
 
-  <title>Data Matrix High-Resolution Test v003</title>
+  <title>Cryovial Scanner Rollback v001</title>
 
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
@@ -16,29 +16,29 @@
     body {
       font-family: Arial, sans-serif;
       margin: 0;
-      padding: 12px;
+      padding: 16px;
       background: #f2f2f2;
       color: #111;
     }
 
     h1 {
-      font-size: 22px;
+      font-size: 24px;
       margin: 0 0 12px 0;
     }
 
     .box {
       background: white;
       border-radius: 12px;
-      padding: 12px;
-      margin-bottom: 12px;
+      padding: 14px;
+      margin-bottom: 14px;
       box-shadow: 0 1px 5px rgba(0,0,0,0.18);
     }
 
     button {
       width: 100%;
-      font-size: 20px;
+      font-size: 22px;
       padding: 14px;
-      margin-top: 8px;
+      margin-top: 10px;
       border: none;
       border-radius: 10px;
       background: #111;
@@ -51,16 +51,11 @@
 
     #reader {
       width: 100%;
-      max-width: 900px;
+      max-width: 430px;
       margin: auto;
     }
 
-    #reader video {
-      width: 100% !important;
-      height: auto !important;
-    }
-
-    .ok {
+    .pass {
       color: green;
       font-weight: bold;
       font-size: 22px;
@@ -72,15 +67,8 @@
       font-size: 22px;
     }
 
-    .label {
-      font-weight: bold;
-      font-size: 16px;
-      margin-top: 12px;
-      color: #333;
-    }
-
-    .value {
-      font-size: 32px;
+    .result {
+      font-size: 30px;
       font-weight: bold;
       color: #003366;
       word-break: break-word;
@@ -88,9 +76,14 @@
 
     .small {
       font-size: 14px;
-      line-height: 1.4;
       color: #444;
+      line-height: 1.4;
       word-break: break-word;
+    }
+
+    .label {
+      font-weight: bold;
+      margin-top: 8px;
     }
 
     code {
@@ -102,22 +95,23 @@
 </head>
 
 <body>
-  <h1>Data Matrix High-Resolution Test v003</h1>
+  <h1>Cryovial Scanner Rollback v001</h1>
 
   <div class="box">
-    <div id="status" class="small">Checking browser...</div>
+    <div id="systemCheck">
+      Checking browser and camera status...
+    </div>
   </div>
 
   <div class="box">
     <div class="small">
-      Current goal only: scan a small <b>Data Matrix</b> containing <code>CS12341</code>.
-      No Apps Script is used on this page.
+      This rollback scanner uses <b>html5-qrcode</b>, not ZXing WASM and not Scanbot.
+      It scans Data Matrix, QR Code, Aztec, and Code 128.
+      For your test, scan a Data Matrix containing <code>CS12341</code>.
     </div>
 
-    <button onclick="startScanner()">Start High-Resolution Data Matrix Scanner</button>
+    <button onclick="startScanner()">Start Camera Scanner</button>
     <button class="secondary" onclick="stopScanner()">Stop Scanner</button>
-    <button class="secondary" onclick="tryZoomIn()">Try Zoom In</button>
-    <button class="secondary" onclick="tryTorch()">Try Torch / Light</button>
   </div>
 
   <div class="box">
@@ -125,32 +119,222 @@
   </div>
 
   <div class="box">
-    <div class="label">Scan result</div>
-    <div id="scanResult" class="value">Nothing scanned yet.</div>
+    <div class="label">Scan result:</div>
+    <div id="scanResult" class="result">No barcode scanned yet.</div>
 
-    <div class="label">Scanner status</div>
-    <div id="scannerStatus" class="small">Not started.</div>
+    <div class="label">Detected format:</div>
+    <div id="scanFormat" class="result">None yet.</div>
   </div>
 
   <div class="box">
-    <div class="label">Technical log</div>
+    <div class="small">Technical log:</div>
     <div id="log" class="small"></div>
   </div>
 
   <script>
     let scanner = null;
     let scannerRunning = false;
-    let lastZoomValue = null;
-    let scanCount = 0;
 
-    const statusEl = document.getElementById("status");
-    const scanResultEl = document.getElementById("scanResult");
-    const scannerStatusEl = document.getElementById("scannerStatus");
-    const logEl = document.getElementById("log");
-
-    function log(message) {
+    function writeLog(message) {
+      const log = document.getElementById("log");
       const time = new Date().toLocaleTimeString();
-      logEl.innerHTML += "[" + time + "] " + escapeHtml(message) + "<br>";
+      log.innerHTML += "[" + time + "] " + escapeHtml(message) + "<br>";
+    }
+
+    function setSystemCheck(html) {
+      document.getElementById("systemCheck").innerHTML = html;
+    }
+
+    function runSystemCheck() {
+      writeLog("URL: " + window.location.href);
+      writeLog("Protocol: " + window.location.protocol);
+      writeLog("Secure context: " + String(window.isSecureContext));
+      writeLog("mediaDevices exists: " + String(!!navigator.mediaDevices));
+      writeLog("getUserMedia exists: " + String(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)));
+      writeLog("Html5Qrcode exists: " + String(typeof Html5Qrcode !== "undefined"));
+      writeLog("Html5QrcodeSupportedFormats exists: " + String(typeof Html5QrcodeSupportedFormats !== "undefined"));
+      writeLog("User agent: " + navigator.userAgent);
+
+      if (window.location.protocol !== "https:") {
+        setSystemCheck(
+          '<div class="fail">FAIL: This page is not HTTPS.</div>' +
+          '<div class="small">Open the GitHub Pages HTTPS URL.</div>'
+        );
+        return false;
+      }
+
+      if (!window.isSecureContext) {
+        setSystemCheck(
+          '<div class="fail">FAIL: Browser does not treat this page as secure.</div>'
+        );
+        return false;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setSystemCheck(
+          '<div class="fail">FAIL: Browser camera API is not available.</div>' +
+          '<div class="small">Use Safari on iPhone or Chrome on Android.</div>'
+        );
+        return false;
+      }
+
+      if (typeof Html5Qrcode === "undefined") {
+        setSystemCheck(
+          '<div class="fail">FAIL: html5-qrcode library did not load.</div>'
+        );
+        return false;
+      }
+
+      if (typeof Html5QrcodeSupportedFormats === "undefined") {
+        setSystemCheck(
+          '<div class="fail">FAIL: barcode format list did not load.</div>'
+        );
+        return false;
+      }
+
+      setSystemCheck(
+        '<div class="pass">PASS: Browser and scanner library loaded.</div>' +
+        '<div class="small">Press Start Camera Scanner.</div>'
+      );
+
+      return true;
+    }
+
+    async function startScanner() {
+      const result = document.getElementById("scanResult");
+      const format = document.getElementById("scanFormat");
+
+      result.textContent = "Starting camera...";
+      format.textContent = "None yet.";
+
+      writeLog("Start Camera Scanner pressed.");
+
+      if (!runSystemCheck()) {
+        return;
+      }
+
+      try {
+        if (!scanner) {
+          scanner = new Html5Qrcode(
+            "reader",
+            {
+              formatsToSupport: [
+                Html5QrcodeSupportedFormats.DATA_MATRIX,
+                Html5QrcodeSupportedFormats.QR_CODE,
+                Html5QrcodeSupportedFormats.AZTEC,
+                Html5QrcodeSupportedFormats.CODE_128
+              ],
+              useBarCodeDetectorIfSupported: true,
+              verbose: false
+            }
+          );
+
+          writeLog("Scanner object created with DATA_MATRIX, QR_CODE, AZTEC, CODE_128.");
+        }
+
+        const config = {
+          fps: 20,
+
+          qrbox: function(viewfinderWidth, viewfinderHeight) {
+            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+            const boxSize = Math.floor(minEdge * 0.65);
+            return {
+              width: boxSize,
+              height: boxSize
+            };
+          },
+
+          aspectRatio: 1.0,
+          disableFlip: true,
+
+          experimentalFeatures: {
+            useBarCodeDetectorIfSupported: true
+          }
+        };
+
+        await scanner.start(
+          { facingMode: "environment" },
+          config,
+          function(decodedText, decodedResult) {
+            const clean = String(decodedText || "").trim();
+
+            result.textContent = clean;
+
+            let detectedFormat = "Detected, format not reported";
+
+            try {
+              if (decodedResult && decodedResult.result && decodedResult.result.format) {
+                detectedFormat =
+                  decodedResult.result.format.formatName ||
+                  String(decodedResult.result.format);
+              }
+            } catch (e) {
+              detectedFormat = "Detected, format not reported";
+            }
+
+            format.textContent = detectedFormat;
+
+            writeLog("BARCODE SCANNED: " + clean);
+            writeLog("FORMAT: " + detectedFormat);
+
+            stopScannerSilently();
+          },
+          function(errorMessage) {
+            // Routine scan-search failures happen continuously.
+            // Do not log them.
+          }
+        );
+
+        scannerRunning = true;
+
+        result.textContent = "Camera is running. Point at Data Matrix.";
+        writeLog("Camera started successfully.");
+
+        try {
+          const settings = scanner.getRunningTrackSettings();
+          writeLog("ACTUAL CAMERA SETTINGS: " + JSON.stringify(settings));
+        } catch (e) {
+          writeLog("Could not read camera settings: " + String(e));
+        }
+
+      } catch (err) {
+        result.textContent = "FAIL: Camera/scanner could not start.";
+        format.textContent = "None.";
+        writeLog("Camera/scanner start error: " + String(err));
+      }
+    }
+
+    async function stopScanner() {
+      writeLog("Stop Scanner pressed.");
+
+      if (!scanner || !scannerRunning) {
+        document.getElementById("scanResult").textContent = "Scanner is not running.";
+        return;
+      }
+
+      try {
+        await scanner.stop();
+        scannerRunning = false;
+        document.getElementById("scanResult").textContent = "Scanner stopped.";
+        writeLog("Scanner stopped successfully.");
+      } catch (err) {
+        writeLog("Stop scanner error: " + String(err));
+      }
+    }
+
+    async function stopScannerSilently() {
+      if (!scanner || !scannerRunning) {
+        return;
+      }
+
+      try {
+        await scanner.stop();
+        scannerRunning = false;
+        writeLog("Scanner stopped after successful scan.");
+      } catch (err) {
+        scannerRunning = false;
+        writeLog("Silent stop error: " + String(err));
+      }
     }
 
     function escapeHtml(text) {
@@ -162,280 +346,7 @@
         .replaceAll("'", "&#039;");
     }
 
-    function precheck() {
-      log("URL: " + window.location.href);
-      log("Protocol: " + window.location.protocol);
-      log("Secure context: " + String(window.isSecureContext));
-      log("User agent: " + navigator.userAgent);
-
-      if (window.location.protocol !== "https:") {
-        statusEl.innerHTML = '<div class="fail">FAIL: Page is not HTTPS.</div>';
-        return false;
-      }
-
-      if (!window.isSecureContext) {
-        statusEl.innerHTML = '<div class="fail">FAIL: Browser does not consider this page secure.</div>';
-        return false;
-      }
-
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        statusEl.innerHTML = '<div class="fail">FAIL: Browser camera API is not available.</div>';
-        return false;
-      }
-
-      if (typeof Html5Qrcode === "undefined") {
-        statusEl.innerHTML = '<div class="fail">FAIL: html5-qrcode did not load.</div>';
-        return false;
-      }
-
-      if (typeof Html5QrcodeSupportedFormats === "undefined") {
-        statusEl.innerHTML = '<div class="fail">FAIL: Html5QrcodeSupportedFormats did not load.</div>';
-        return false;
-      }
-
-      statusEl.innerHTML =
-        '<div class="ok">PASS: Browser and html5-qrcode loaded.</div>' +
-        '<div class="small">Press Start High-Resolution Data Matrix Scanner.</div>';
-
-      return true;
-    }
-
-    async function startScanner() {
-      if (!precheck()) return;
-
-      scanResultEl.textContent = "Starting camera...";
-      scannerStatusEl.textContent = "Starting scanner...";
-      scanCount = 0;
-      lastZoomValue = null;
-
-      try {
-        if (!scanner) {
-          scanner = new Html5Qrcode(
-            "reader",
-            {
-              formatsToSupport: [
-                Html5QrcodeSupportedFormats.DATA_MATRIX
-              ],
-              useBarCodeDetectorIfSupported: false,
-              verbose: false
-            }
-          );
-
-          log("Created scanner: DATA_MATRIX only. Native BarcodeDetector disabled.");
-        }
-
-        const config = {
-          fps: 30,
-
-          /*
-            Use almost the whole camera view.
-            Small Data Matrix symbols should not be forced into a tiny 250x250 box.
-          */
-          qrbox: function(viewfinderWidth, viewfinderHeight) {
-            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-            const edge = Math.floor(minEdge * 0.98);
-            return {
-              width: edge,
-              height: edge
-            };
-          },
-
-          disableFlip: true,
-
-          /*
-            High-resolution request. These are ideal constraints.
-            The browser may still provide lower resolution; the actual value is logged.
-          */
-          videoConstraints: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 3840 },
-            height: { ideal: 2160 },
-            frameRate: { ideal: 30 },
-            resizeMode: "none"
-          }
-        };
-
-        await scanner.start(
-          { facingMode: { ideal: "environment" } },
-          config,
-          onScanSuccess,
-          onScanFailure
-        );
-
-        scannerRunning = true;
-
-        scanResultEl.textContent = "Camera running. Aim at Data Matrix.";
-        scannerStatusEl.textContent = "Scanning Data Matrix only.";
-
-        log("Scanner started.");
-
-        logActualCameraSettings();
-        tryContinuousFocus();
-
-      } catch (error) {
-        scanResultEl.textContent = "Scanner failed.";
-        scannerStatusEl.innerHTML =
-          '<div class="fail">' + escapeHtml(String(error)) + '</div>';
-        log("Scanner start error: " + String(error));
-      }
-    }
-
-    function onScanSuccess(decodedText, decodedResult) {
-      const value = String(decodedText || "").trim();
-
-      if (!value) return;
-
-      scanCount += 1;
-
-      scanResultEl.textContent = value;
-      scannerStatusEl.innerHTML =
-        '<div class="ok">SUCCESS: Data Matrix scanned.</div>' +
-        '<div class="small">Scan count: ' + scanCount + '</div>';
-
-      log("SCAN SUCCESS: " + value);
-
-      /*
-        Stop after first valid scan.
-        For repeated testing, press Start again.
-      */
-      stopScanner();
-    }
-
-    function onScanFailure(errorMessage) {
-      /*
-        Expected while searching. Do not log continuously.
-      */
-    }
-
-    async function stopScanner() {
-      if (!scanner || !scannerRunning) {
-        scannerStatusEl.textContent = "Scanner is not running.";
-        return;
-      }
-
-      try {
-        await scanner.stop();
-        scannerRunning = false;
-        scannerStatusEl.textContent = "Scanner stopped.";
-        log("Scanner stopped.");
-      } catch (error) {
-        log("Stop scanner error: " + String(error));
-      }
-    }
-
-    function logActualCameraSettings() {
-      try {
-        const settings = scanner.getRunningTrackSettings();
-        log("ACTUAL CAMERA SETTINGS: " + JSON.stringify(settings));
-
-        if (settings.width && settings.height) {
-          statusEl.innerHTML =
-            '<div class="ok">Camera active.</div>' +
-            '<div class="small">Actual stream: <b>' +
-            escapeHtml(settings.width + " × " + settings.height) +
-            '</b></div>';
-        }
-      } catch (error) {
-        log("Could not read actual camera settings: " + String(error));
-      }
-
-      try {
-        const capabilities = scanner.getRunningTrackCapabilities();
-        log("CAMERA CAPABILITIES: " + JSON.stringify(capabilities));
-      } catch (error) {
-        log("Could not read camera capabilities: " + String(error));
-      }
-    }
-
-    async function tryContinuousFocus() {
-      if (!scanner || !scannerRunning) {
-        log("Continuous focus skipped: scanner not running.");
-        return;
-      }
-
-      try {
-        await scanner.applyVideoConstraints({
-          advanced: [
-            { focusMode: "continuous" }
-          ]
-        });
-
-        log("Requested continuous focus.");
-      } catch (error) {
-        log("Continuous focus not applied: " + String(error));
-      }
-    }
-
-    async function tryZoomIn() {
-      if (!scanner || !scannerRunning) {
-        log("Zoom requested but scanner is not running.");
-        return;
-      }
-
-      try {
-        const capabilities = scanner.getRunningTrackCapabilities();
-
-        if (!capabilities || !capabilities.zoom) {
-          log("Zoom not exposed by this browser/camera.");
-          return;
-        }
-
-        const minZoom = capabilities.zoom.min || 1;
-        const maxZoom = capabilities.zoom.max || 1;
-        const step = capabilities.zoom.step || 0.1;
-
-        if (lastZoomValue === null) {
-          lastZoomValue = Math.min(maxZoom, Math.max(minZoom, 2));
-        } else {
-          lastZoomValue = Math.min(maxZoom, lastZoomValue + step * 5);
-        }
-
-        await scanner.applyVideoConstraints({
-          advanced: [
-            { zoom: lastZoomValue }
-          ]
-        });
-
-        log("Applied zoom: " + lastZoomValue + " / max " + maxZoom);
-        logActualCameraSettings();
-
-      } catch (error) {
-        log("Zoom request failed: " + String(error));
-      }
-    }
-
-    async function tryTorch() {
-      if (!scanner || !scannerRunning) {
-        log("Torch requested but scanner is not running.");
-        return;
-      }
-
-      try {
-        const capabilities = scanner.getRunningTrackCapabilities();
-
-        if (!capabilities || !capabilities.torch) {
-          log("Torch not exposed by this browser/camera.");
-          return;
-        }
-
-        await scanner.applyVideoConstraints({
-          advanced: [
-            { torch: true }
-          ]
-        });
-
-        log("Torch requested ON.");
-      } catch (error) {
-        log("Torch request failed: " + String(error));
-      }
-    }
-
-    precheck();
-
-    window.startScanner = startScanner;
-    window.stopScanner = stopScanner;
-    window.tryZoomIn = tryZoomIn;
-    window.tryTorch = tryTorch;
+    runSystemCheck();
   </script>
 </body>
 </html>
