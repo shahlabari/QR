@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cryovial QR Camera Test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!--
+    This loads the QR scanner library.
+    It is loaded over HTTPS.
+    For the first proof-of-concept, this is acceptable.
+  -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #f2f2f2;
+      color: #111;
+    }
+
+    h1 {
+      font-size: 26px;
+      margin: 0 0 12px 0;
+    }
+
+    .box {
+      background: white;
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 14px;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.18);
+    }
+
+    button {
+      width: 100%;
+      font-size: 22px;
+      padding: 14px;
+      margin-top: 10px;
+      border: none;
+      border-radius: 10px;
+      background: #111;
+      color: white;
+    }
+
+    button.secondary {
+      background: #555;
+    }
+
+    #reader {
+      width: 100%;
+      max-width: 430px;
+      margin: auto;
+    }
+
+    .status {
+      font-size: 18px;
+      line-height: 1.4;
+    }
+
+    .pass {
+      color: green;
+      font-weight: bold;
+      font-size: 22px;
+    }
+
+    .fail {
+      color: #b00020;
+      font-weight: bold;
+      font-size: 22px;
+    }
+
+    .result {
+      font-size: 30px;
+      font-weight: bold;
+      color: #003366;
+      word-break: break-word;
+    }
+
+    .small {
+      font-size: 14px;
+      color: #444;
+      line-height: 1.4;
+    }
+
+    code {
+      background: #eee;
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Cryovial QR Camera Test</h1>
+
+  <div class="box">
+    <div class="status" id="systemCheck">
+      Checking browser and HTTPS status...
+    </div>
+  </div>
+
+  <div class="box">
+    <div class="small">
+      This page tests only one thing: whether this phone can open its camera from this HTTPS GitHub Pages webpage and scan a QR code.
+      For this test, scan a QR code containing <code>CS34521</code>.
+    </div>
+
+    <button onclick="startScanner()">Start Camera Scanner</button>
+    <button class="secondary" onclick="stopScanner()">Stop Scanner</button>
+  </div>
+
+  <div class="box">
+    <div id="reader"></div>
+  </div>
+
+  <div class="box">
+    <div class="small">Scan result:</div>
+    <div id="scanResult" class="result">No QR scanned yet.</div>
+  </div>
+
+  <div class="box">
+    <div class="small">Technical log:</div>
+    <div id="log" class="small"></div>
+  </div>
+
+  <script>
+    let scanner = null;
+    let scannerRunning = false;
+
+    function writeLog(message) {
+      const log = document.getElementById("log");
+      const time = new Date().toLocaleTimeString();
+      log.innerHTML += "[" + time + "] " + escapeHtml(message) + "<br>";
+    }
+
+    function setSystemCheck(html) {
+      document.getElementById("systemCheck").innerHTML = html;
+    }
+
+    function runSystemCheck() {
+      const parts = [];
+
+      parts.push("Page URL: " + window.location.href);
+      parts.push("Protocol: " + window.location.protocol);
+      parts.push("Secure context: " + String(window.isSecureContext));
+      parts.push("navigator.mediaDevices exists: " + String(!!navigator.mediaDevices));
+      parts.push("getUserMedia exists: " + String(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)));
+      parts.push("User agent: " + navigator.userAgent);
+
+      writeLog(parts.join(" | "));
+
+      if (window.location.protocol !== "https:") {
+        setSystemCheck(
+          '<div class="fail">FAIL: This page is not HTTPS.</div>' +
+          '<div class="small">Camera access requires HTTPS. Do not test from a local file or non-HTTPS page.</div>'
+        );
+        return;
+      }
+
+      if (!window.isSecureContext) {
+        setSystemCheck(
+          '<div class="fail">FAIL: Browser does not consider this page secure.</div>' +
+          '<div class="small">Camera access will not work unless the browser treats the page as a secure context.</div>'
+        );
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setSystemCheck(
+          '<div class="fail">FAIL: Browser camera API is not available.</div>' +
+          '<div class="small">Try Safari on iPhone or Chrome on Android. Also check browser camera permissions.</div>'
+        );
+        return;
+      }
+
+      setSystemCheck(
+        '<div class="pass">PASS: HTTPS and browser camera API are available.</div>' +
+        '<div class="small">Next step: press Start Camera Scanner and allow camera permission.</div>'
+      );
+    }
+
+    async function startScanner() {
+      const result = document.getElementById("scanResult");
+      result.textContent = "Starting camera...";
+      writeLog("Start Camera Scanner pressed.");
+
+      if (window.location.protocol !== "https:" || !window.isSecureContext) {
+        result.textContent = "FAIL: Page is not HTTPS/secure.";
+        writeLog("Blocked because page is not HTTPS or not secure context.");
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        result.textContent = "FAIL: Camera API not available.";
+        writeLog("navigator.mediaDevices.getUserMedia is unavailable.");
+        return;
+      }
+
+      if (typeof Html5Qrcode === "undefined") {
+        result.textContent = "FAIL: html5-qrcode library did not load.";
+        writeLog("Html5Qrcode is undefined. The scanner library did not load.");
+        return;
+      }
+
+      try {
+        if (!scanner) {
+          scanner = new Html5Qrcode("reader");
+          writeLog("Html5Qrcode scanner object created.");
+        }
+
+        const config = {
+          fps: 10,
+          qrbox: {
+            width: 250,
+            height: 250
+          },
+          aspectRatio: 1.0
+        };
+
+        await scanner.start(
+          { facingMode: "environment" },
+          config,
+          function(decodedText, decodedResult) {
+            const clean = String(decodedText || "").trim();
+
+            result.textContent = clean;
+            writeLog("QR SCANNED: " + clean);
+
+            stopScannerSilently();
+          },
+          function(errorMessage) {
+            // Routine scan-search errors happen many times per second.
+            // Do not print them because they flood the log.
+          }
+        );
+
+        scannerRunning = true;
+        result.textContent = "Camera is running. Point at QR code.";
+        writeLog("Camera started successfully.");
+
+      } catch (err) {
+        result.textContent = "FAIL: Camera/scanner could not start.";
+        writeLog("Camera/scanner start error: " + String(err));
+      }
+    }
+
+    async function stopScanner() {
+      writeLog("Stop Scanner pressed.");
+
+      if (!scanner || !scannerRunning) {
+        document.getElementById("scanResult").textContent = "Scanner is not running.";
+        writeLog("Stop requested but scanner was not running.");
+        return;
+      }
+
+      try {
+        await scanner.stop();
+        scannerRunning = false;
+        document.getElementById("scanResult").textContent = "Scanner stopped.";
+        writeLog("Scanner stopped successfully.");
+      } catch (err) {
+        writeLog("Stop scanner error: " + String(err));
+      }
+    }
+
+    async function stopScannerSilently() {
+      if (!scanner || !scannerRunning) {
+        return;
+      }
+
+      try {
+        await scanner.stop();
+        scannerRunning = false;
+        writeLog("Scanner stopped after successful scan.");
+      } catch (err) {
+        writeLog("Silent stop error: " + String(err));
+      }
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    runSystemCheck();
+  </script>
+</body>
+</html>
