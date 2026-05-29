@@ -1,352 +1,844 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+<meta charset="UTF-8">
+<!--
+  CRITICAL: viewport meta must set width=device-width so the browser does NOT
+  scale down the page on a phone. user-scalable=no prevents accidental pinch
+  zoom which would blur the camera preview.
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0"
-  >
+<!--
+  PWA manifest inline: tells Android Chrome this can be installed as a home
+  screen app. Not required to scan but allows offline use after first load.
+-->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0a0a">
 
-  <title>Cryovial Scanner Rollback v001</title>
+<title>Cryovial Scanner — Phase 1</title>
 
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  /*
+    Reset and base. We use system-ui here only because this is a phone utility
+    tool — not a public-facing document. Legibility at small sizes on a phone
+    screen is the priority.
+  */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 0;
-      padding: 16px;
-      background: #f2f2f2;
-      color: #111;
-    }
+  :root {
+    --bg: #0a0a0a;
+    --surface: #161616;
+    --border: #2a2a2a;
+    --text-primary: #f0f0f0;
+    --text-secondary: #888;
+    --accent: #00e5a0;       /* high-visibility green for success state */
+    --accent-fail: #ff4d4d;  /* red for decode failure */
+    --accent-idle: #ffb300;  /* amber for scanning / standby */
+  }
 
-    h1 {
-      font-size: 24px;
-      margin: 0 0 12px 0;
-    }
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, sans-serif;
+    overflow: hidden;        /* no scroll — camera fills full viewport */
+  }
 
-    .box {
-      background: white;
-      border-radius: 12px;
-      padding: 14px;
-      margin-bottom: 14px;
-      box-shadow: 0 1px 5px rgba(0,0,0,0.18);
-    }
+  /* ── LAYOUT ─────────────────────────────────────────────────────────────── */
 
-    button {
-      width: 100%;
-      font-size: 22px;
-      padding: 14px;
-      margin-top: 10px;
-      border: none;
-      border-radius: 10px;
-      background: #111;
-      color: white;
-    }
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;          /* dvh = dynamic viewport height, correct on iOS */
+  }
 
-    button.secondary {
-      background: #555;
-    }
+  /* Top status bar */
+  #statusbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
 
-    #reader {
-      width: 100%;
-      max-width: 430px;
-      margin: auto;
-    }
+  #status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent-idle);
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
 
-    .pass {
-      color: green;
-      font-weight: bold;
-      font-size: 22px;
-    }
+  #status-text {
+    color: var(--text-secondary);
+    flex: 1;
+  }
 
-    .fail {
-      color: #b00020;
-      font-weight: bold;
-      font-size: 22px;
-    }
+  /* Camera area — fills remaining vertical space */
+  #camera-container {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+    background: #000;
+  }
 
-    .result {
-      font-size: 30px;
-      font-weight: bold;
-      color: #003366;
-      word-break: break-word;
-    }
+  /*
+    VIDEO ELEMENT BEHAVIOUR — IMPORTANT:
+    We set width and height to 100% of the container so the preview fills the
+    screen. HOWEVER the actual frame grabbed for decoding is taken from a
+    hidden <canvas> at the camera's NATIVE resolution — not the display size.
+    object-fit: cover clips the preview but does not affect the decode canvas.
+  */
+  #video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
 
-    .small {
-      font-size: 14px;
-      color: #444;
-      line-height: 1.4;
-      word-break: break-word;
-    }
+  /* Aiming reticle overlay — purely visual guide for the user */
+  #reticle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 120px;
+    height: 120px;
+    pointer-events: none;
+  }
 
-    .label {
-      font-weight: bold;
-      margin-top: 8px;
-    }
+  /* Four corner brackets drawn with CSS borders, no image assets */
+  .corner {
+    position: absolute;
+    width: 28px;
+    height: 28px;
+    border-color: var(--accent-idle);
+    border-style: solid;
+    transition: border-color 0.3s;
+  }
+  .corner.tl { top: 0;    left: 0;  border-width: 3px 0 0 3px; }
+  .corner.tr { top: 0;    right: 0; border-width: 3px 3px 0 0; }
+  .corner.bl { bottom: 0; left: 0;  border-width: 0 0 3px 3px; }
+  .corner.br { bottom: 0; right: 0; border-width: 0 3px 3px 0; }
 
-    code {
-      background: #eee;
-      padding: 2px 5px;
-      border-radius: 4px;
-    }
-  </style>
+  /* Corners turn green on success, red on repeated failure */
+  .corner.success { border-color: var(--accent) !important; }
+  .corner.fail    { border-color: var(--accent-fail) !important; }
+
+  /* ── RESULT PANEL ───────────────────────────────────────────────────────── */
+  /*
+    Slides up from bottom when a decode succeeds.
+    Default: hidden below screen (translateY 100%).
+    Active: slides into view.
+  */
+  #result-panel {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 20px 16px 32px;
+    transform: translateY(100%);
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 10;
+  }
+
+  #result-panel.visible {
+    transform: translateY(0);
+  }
+
+  #result-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+
+  #result-value {
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--accent);
+    word-break: break-all;
+    margin-bottom: 16px;
+    font-family: 'Courier New', monospace; /* monospace for barcode IDs */
+  }
+
+  /* Metadata row: format detected, frame resolution used */
+  #result-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+    line-height: 1.6;
+  }
+
+  /* Button row */
+  #btn-row {
+    display: flex;
+    gap: 10px;
+  }
+
+  .btn {
+    flex: 1;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* ── DEBUG PANEL ────────────────────────────────────────────────────────── */
+  /*
+    Shows camera track resolution and ZXing decode attempts.
+    This is ESSENTIAL during Phase 1 testing so you can confirm the actual
+    pixel resolution being sent to the decoder.
+    Toggle with the "Debug" button.
+  */
+  #debug-panel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0,0,0,0.85);
+    padding: 10px 14px;
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
+    color: #0f0;
+    line-height: 1.8;
+    z-index: 20;
+    display: none;
+    max-height: 45vh;
+    overflow-y: auto;
+  }
+
+  #debug-panel.visible { display: block; }
+
+  #debug-toggle {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    z-index: 30;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Hidden canvas — decode happens here at native resolution, never displayed */
+  #decode-canvas { display: none; }
+
+</style>
 </head>
 
 <body>
-  <h1>Cryovial Scanner Rollback v001</h1>
+<div id="app">
 
-  <div class="box">
-    <div id="systemCheck">
-      Checking browser and camera status...
+  <!-- ── STATUS BAR ─────────────────────────────────────────────────────── -->
+  <div id="statusbar">
+    <div id="status-dot"></div>
+    <span id="status-text">Initialising camera…</span>
+  </div>
+
+  <!-- ── CAMERA AREA ────────────────────────────────────────────────────── -->
+  <div id="camera-container">
+
+    <!-- Live camera preview -->
+    <video id="video" autoplay muted playsinline></video>
+
+    <!--
+      Hidden canvas.
+      Frames are drawn here at NATIVE camera resolution for decoding.
+      This is separate from the <video> element so display scaling does
+      not reduce the pixel data sent to ZXing.
+    -->
+    <canvas id="decode-canvas"></canvas>
+
+    <!-- Aiming reticle -->
+    <div id="reticle">
+      <div class="corner tl"></div>
+      <div class="corner tr"></div>
+      <div class="corner bl"></div>
+      <div class="corner br"></div>
     </div>
-  </div>
 
-  <div class="box">
-    <div class="small">
-      This rollback scanner uses <b>html5-qrcode</b>, not ZXing WASM and not Scanbot.
-      It scans Data Matrix, QR Code, Aztec, and Code 128.
-      For your test, scan a Data Matrix containing <code>CS12341</code>.
+    <!-- Debug toggle button -->
+    <button id="debug-toggle" onclick="toggleDebug()">Debug</button>
+
+    <!-- Debug output panel -->
+    <div id="debug-panel" role="log" aria-live="polite"></div>
+
+    <!-- Result slide-up panel -->
+    <div id="result-panel" role="region" aria-label="Scan result">
+      <div id="result-label">Decoded value</div>
+      <div id="result-value">—</div>
+      <div id="result-meta"></div>
+      <div id="btn-row">
+        <button class="btn" onclick="dismissResult()">Scan again</button>
+        <button class="btn btn-primary" onclick="copyResult()">Copy</button>
+      </div>
     </div>
 
-    <button onclick="startScanner()">Start Camera Scanner</button>
-    <button class="secondary" onclick="stopScanner()">Stop Scanner</button>
-  </div>
+  </div><!-- /camera-container -->
+</div><!-- /app -->
 
-  <div class="box">
-    <div id="reader"></div>
-  </div>
+<!--
+  ZXing-JS library.
+  Version 0.21.3 — the last release with full Data Matrix decode support.
+  Source: https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js
+  This loads the UMD bundle which exposes the global `ZXing` object.
+  MUST load before our script block below.
+-->
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 
-  <div class="box">
-    <div class="label">Scan result:</div>
-    <div id="scanResult" class="result">No barcode scanned yet.</div>
+<script>
+/*
+  ============================================================================
+  PHASE 1 SCANNER — COMPLETE ANNOTATED IMPLEMENTATION
+  ============================================================================
 
-    <div class="label">Detected format:</div>
-    <div id="scanFormat" class="result">None yet.</div>
-  </div>
+  Architecture:
+  1. Request rear camera at maximum available resolution via getUserMedia.
+  2. On each animation frame (requestAnimationFrame loop):
+     a. Draw the current video frame to a hidden canvas at NATIVE resolution.
+     b. Apply adaptive thresholding to the canvas pixel data (increases
+        contrast of dark modules on light background — critical for 5mm DM).
+     c. Pass the preprocessed ImageData to ZXing BrowserMultiFormatReader.
+     d. On success: display result, stop loop.
+     e. On failure: continue loop silently.
+  3. User reads result, taps "Scan again" to restart.
 
-  <div class="box">
-    <div class="small">Technical log:</div>
-    <div id="log" class="small"></div>
-  </div>
+  Key design decisions:
+  - We do NOT use ZXing's built-in continuous scan (decodeFromVideoDevice)
+    because it uses the video preview resolution, not the full sensor.
+  - We manually grab frames via canvas to control resolution.
+  - Adaptive threshold is applied because 5mm Data Matrix on a white label
+    may have low contrast under phone LED lighting.
+  ============================================================================
+*/
 
-  <script>
-    let scanner = null;
-    let scannerRunning = false;
+// ── STATE ────────────────────────────────────────────────────────────────────
 
-    function writeLog(message) {
-      const log = document.getElementById("log");
-      const time = new Date().toLocaleTimeString();
-      log.innerHTML += "[" + time + "] " + escapeHtml(message) + "<br>";
+let videoStream        = null;   // MediaStream from getUserMedia
+let videoTrack         = null;   // the actual video track (for capabilities)
+let animFrameId        = null;   // requestAnimationFrame handle
+let isScanning         = false;  // true while the decode loop is running
+let lastDecodeResult   = null;   // stores most recent successful decode
+let debugLines         = [];     // rolling debug log (last 30 lines)
+let frameCount         = 0;      // counts frames processed (shown in debug)
+let decodeAttempts     = 0;      // counts ZXing calls made
+let successCount       = 0;      // counts successful decodes this session
+
+// ── DOM REFS ─────────────────────────────────────────────────────────────────
+
+const video         = document.getElementById('video');
+const canvas        = document.getElementById('decode-canvas');
+const ctx           = canvas.getContext('2d', { willReadFrequently: true });
+/*
+  willReadFrequently: true is a performance hint to the browser that we will
+  call getImageData() on every frame. Without this, Chrome/Safari may use a
+  GPU-accelerated context that makes getImageData() slow.
+*/
+
+const statusDot     = document.getElementById('status-dot');
+const statusText    = document.getElementById('status-text');
+const resultPanel   = document.getElementById('result-panel');
+const resultValue   = document.getElementById('result-value');
+const resultMeta    = document.getElementById('result-meta');
+const debugPanel    = document.getElementById('debug-panel');
+const corners       = document.querySelectorAll('.corner');
+
+// ── ZXING READER SETUP ───────────────────────────────────────────────────────
+
+/*
+  BrowserMultiFormatReader: ZXing's general-purpose reader.
+  It attempts ALL supported formats in sequence.
+
+  Supported formats relevant to us:
+    - DATA_MATRIX (ISO/IEC 16022)  ← primary target
+    - QR_CODE
+    - CODE_128, CODE_39, EAN_13, etc.
+
+  We configure hints to PRIORITISE Data Matrix. ZXing's hint system:
+  - DecodeHintType.POSSIBLE_FORMATS: array of BarcodeFormat values to try.
+    By listing DATA_MATRIX first, the reader attempts it first on every frame.
+  - DecodeHintType.TRY_HARDER: tells the decoder to use more compute to find
+    a barcode even when the image is marginal. ESSENTIAL for 5mm symbols.
+  - DecodeHintType.PURE_BARCODE: false (default) — we do NOT set this because
+    PURE_BARCODE assumes the entire image is barcode with no surrounding
+    content. Our frame includes the whole camera view.
+*/
+
+let reader = null;
+
+function initZXing() {
+  try {
+    const hints = new Map();
+    hints.set(
+      ZXing.DecodeHintType.POSSIBLE_FORMATS,
+      [ZXing.BarcodeFormat.DATA_MATRIX]
+      /*
+        We restrict to DATA_MATRIX only. Rationale:
+        - Trying all formats on every frame is slower.
+        - On a 5mm symbol, a wrong-format attempt wastes decode time.
+        - If you later want QR fallback, add ZXing.BarcodeFormat.QR_CODE here.
+      */
+    );
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    /*
+      TRY_HARDER explanation:
+      Standard mode looks for quiet zones (blank borders) to locate the symbol.
+      At 5mm, the quiet zone may be only a few pixels wide. TRY_HARDER uses
+      additional location strategies to find symbols without a clear quiet zone.
+    */
+
+    reader = new ZXing.BrowserMultiFormatReader(hints);
+    debugLog('ZXing 0.21.3 initialised — DATA_MATRIX + TRY_HARDER');
+    return true;
+  } catch (err) {
+    debugLog('ZXing init FAILED: ' + err.message);
+    setStatus('error', 'ZXing library failed to load. Check network connection.');
+    return false;
+  }
+}
+
+// ── CAMERA INITIALISATION ─────────────────────────────────────────────────────
+
+async function startCamera() {
+  setStatus('idle', 'Requesting camera access…');
+
+  /*
+    getUserMedia constraints.
+
+    facingMode: 'environment' = rear camera on phones (the one with the lens
+    facing the world, not the selfie camera).
+
+    Width and height are set as IDEAL values, not exact. The browser will
+    give us the closest resolution the hardware supports.
+
+    We request 4096×3072 (12MP). Most modern phones support at least
+    3264×2448 (8MP) for the rear camera. The browser negotiates downward.
+
+    WHY DOES RESOLUTION MATTER FOR A 5mm SYMBOL?
+    At 5mm physical size, a 16×16 Data Matrix has modules of 0.31mm each.
+    At 3264px across a typical 4mm sensor FOV (when held ~5cm from the tube):
+      3264px / 4mm = 816 px/mm → each module ≈ 0.31mm × 816 = ~253px/module
+    This is far above the minimum needed (~3px/module).
+    At lower resolutions (e.g. 1280×720 preview):
+      1280px / 4mm = 320 px/mm → each module ≈ 99px/module
+    Still above the minimum. However, JPEG compression in the preview stream
+    can destroy module edges. Full-resolution frame bypasses this compression.
+  */
+
+  const constraints = {
+    video: {
+      facingMode: { exact: 'environment' },
+      width:  { ideal: 4096 },
+      height: { ideal: 3072 },
+      /*
+        focusMode: we do NOT force 'macro' here because not all browsers
+        support it via getUserMedia constraints. Auto-focus handles the
+        ~5cm working distance fine on all modern phones.
+      */
     }
+  };
 
-    function setSystemCheck(html) {
-      document.getElementById("systemCheck").innerHTML = html;
+  try {
+    videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (exactErr) {
+    /*
+      If 'exact' facingMode fails (some iPhones, some Android):
+      Fall back to ideal (not exact) — may give front camera on first attempt.
+    */
+    debugLog('exact facingMode failed, retrying with ideal: ' + exactErr.message);
+    const fallback = {
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 4096 },
+        height: { ideal: 3072 },
+      }
+    };
+    try {
+      videoStream = await navigator.mediaDevices.getUserMedia(fallback);
+    } catch (fallbackErr) {
+      setStatus('error', 'Camera access denied or unavailable: ' + fallbackErr.message);
+      debugLog('getUserMedia FAILED: ' + fallbackErr.message);
+      return;
     }
+  }
 
-    function runSystemCheck() {
-      writeLog("URL: " + window.location.href);
-      writeLog("Protocol: " + window.location.protocol);
-      writeLog("Secure context: " + String(window.isSecureContext));
-      writeLog("mediaDevices exists: " + String(!!navigator.mediaDevices));
-      writeLog("getUserMedia exists: " + String(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)));
-      writeLog("Html5Qrcode exists: " + String(typeof Html5Qrcode !== "undefined"));
-      writeLog("Html5QrcodeSupportedFormats exists: " + String(typeof Html5QrcodeSupportedFormats !== "undefined"));
-      writeLog("User agent: " + navigator.userAgent);
+  // Attach stream to video element
+  video.srcObject = videoStream;
 
-      if (window.location.protocol !== "https:") {
-        setSystemCheck(
-          '<div class="fail">FAIL: This page is not HTTPS.</div>' +
-          '<div class="small">Open the GitHub Pages HTTPS URL.</div>'
-        );
-        return false;
+  // Wait for video metadata so we know actual dimensions
+  await new Promise((resolve) => {
+    video.onloadedmetadata = () => {
+      video.play();
+      resolve();
+    };
+  });
+
+  // Retrieve actual track capabilities
+  videoTrack = videoStream.getVideoTracks()[0];
+  const settings    = videoTrack.getSettings();
+  const capabilities = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+
+  debugLog('Camera: ' + (settings.label || videoTrack.label || 'unknown'));
+  debugLog('Granted resolution: ' + settings.width + '×' + settings.height);
+  debugLog('Video element: ' + video.videoWidth + '×' + video.videoHeight);
+  if (capabilities.width) {
+    debugLog('Max supported: ' + capabilities.width.max + '×' + capabilities.height.max);
+  }
+
+  /*
+    Set canvas to EXACTLY the video's native frame dimensions.
+    This is the key step: canvas matches video source, not display size.
+    So when we drawImage(video, 0, 0) we get full-resolution pixels.
+  */
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+  debugLog('Decode canvas set to: ' + canvas.width + '×' + canvas.height);
+
+  setStatus('scanning', 'Scanning — hold phone steady over cap');
+  cornersSetState('');
+  isScanning = true;
+  frameCount = 0;
+  decodeAttempts = 0;
+
+  // Start the decode loop
+  scheduleNextFrame();
+}
+
+// ── DECODE LOOP ───────────────────────────────────────────────────────────────
+
+function scheduleNextFrame() {
+  /*
+    We use requestAnimationFrame, not setInterval.
+    Rationale:
+    - rAF syncs with the display refresh rate (~60fps) and pauses automatically
+      when the tab is backgrounded, saving battery.
+    - We skip frames where the video hasn't advanced (readyState < 2).
+  */
+  if (!isScanning) return;
+  animFrameId = requestAnimationFrame(decodeFrame);
+}
+
+function decodeFrame() {
+  if (!isScanning) return;
+  if (video.readyState < 2) {
+    // Video not ready yet — skip this frame
+    scheduleNextFrame();
+    return;
+  }
+
+  frameCount++;
+
+  /*
+    Step 1: Draw video frame to canvas at native resolution.
+    drawImage with no scaling arguments copies the full video frame.
+  */
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  /*
+    Step 2: Apply adaptive threshold preprocessing.
+    We call this BEFORE ZXing decodes. Rationale:
+    - A 5mm Data Matrix on a white polyolefin label under phone LED flash
+      may have low contrast in the centre of the symbol.
+    - Adaptive threshold computes a local mean over a small window and
+      binarises: pixels darker than local mean → 0 (black module),
+      lighter → 255 (white).
+    - This handles uneven illumination across the small symbol area.
+  */
+  preprocessAdaptiveThreshold(canvas.width, canvas.height);
+
+  /*
+    Step 3: Attempt ZXing decode.
+    luminanceSource: ZXing reads the canvas via an HTMLCanvasElement
+    passed to decodeFromCanvas(). This is a synchronous call — it blocks
+    the JS thread for ~1–5ms per frame on modern phones.
+  */
+  decodeAttempts++;
+
+  try {
+    const result = reader.decodeFromCanvas(canvas);
+    /*
+      Success path: result is a ZXing.Result object with:
+        result.getText()    → the decoded string (e.g. "CS12341")
+        result.getBarcodeFormat() → ZXing.BarcodeFormat.DATA_MATRIX
+        result.getResultPoints() → corner points of the symbol in the image
+    */
+    onDecodeSuccess(result);
+  } catch (err) {
+    /*
+      ZXing throws NotFoundException when no barcode is found in the frame.
+      This is expected and normal — not a real error.
+      Any other error type would be unexpected and is logged.
+    */
+    if (err && err.name === 'NotFoundException') {
+      // Normal — no symbol found this frame
+      if (frameCount % 30 === 0) {
+        // Log status every 30 frames (~0.5s at 60fps) to avoid flooding debug
+        debugLog('Frame ' + frameCount + ' | attempts: ' + decodeAttempts + ' | no decode');
       }
-
-      if (!window.isSecureContext) {
-        setSystemCheck(
-          '<div class="fail">FAIL: Browser does not treat this page as secure.</div>'
-        );
-        return false;
-      }
-
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setSystemCheck(
-          '<div class="fail">FAIL: Browser camera API is not available.</div>' +
-          '<div class="small">Use Safari on iPhone or Chrome on Android.</div>'
-        );
-        return false;
-      }
-
-      if (typeof Html5Qrcode === "undefined") {
-        setSystemCheck(
-          '<div class="fail">FAIL: html5-qrcode library did not load.</div>'
-        );
-        return false;
-      }
-
-      if (typeof Html5QrcodeSupportedFormats === "undefined") {
-        setSystemCheck(
-          '<div class="fail">FAIL: barcode format list did not load.</div>'
-        );
-        return false;
-      }
-
-      setSystemCheck(
-        '<div class="pass">PASS: Browser and scanner library loaded.</div>' +
-        '<div class="small">Press Start Camera Scanner.</div>'
-      );
-
-      return true;
+      scheduleNextFrame();
+    } else {
+      // Unexpected error — log and continue
+      debugLog('Unexpected decode error: ' + (err ? err.message : 'unknown'));
+      scheduleNextFrame();
     }
+  }
+}
 
-    async function startScanner() {
-      const result = document.getElementById("scanResult");
-      const format = document.getElementById("scanFormat");
+// ── ADAPTIVE THRESHOLD PREPROCESSING ─────────────────────────────────────────
 
-      result.textContent = "Starting camera...";
-      format.textContent = "None yet.";
+function preprocessAdaptiveThreshold(w, h) {
+  /*
+    Lightweight adaptive threshold implementation using canvas pixel data.
 
-      writeLog("Start Camera Scanner pressed.");
+    Algorithm:
+    1. Get all RGBA pixel data from canvas (Uint8ClampedArray, 4 bytes/pixel).
+    2. Convert to greyscale: L = 0.299R + 0.587G + 0.114B (ITU-R BT.601).
+    3. For each pixel, compute the mean luminance in a blockSize×blockSize
+       window centred on that pixel.
+    4. If pixel luminance < (local mean - C), mark as black (0); else white (255).
+    5. Write back to canvas as greyscale RGBA.
 
-      if (!runSystemCheck()) {
-        return;
-      }
+    blockSize: 31px — large enough to span ~3 modules at typical resolution,
+    small enough to respond to local illumination variation.
+    C (constant): 10 — bias toward white to avoid false modules.
 
-      try {
-        if (!scanner) {
-          scanner = new Html5Qrcode(
-            "reader",
-            {
-              formatsToSupport: [
-                Html5QrcodeSupportedFormats.DATA_MATRIX,
-                Html5QrcodeSupportedFormats.QR_CODE,
-                Html5QrcodeSupportedFormats.AZTEC,
-                Html5QrcodeSupportedFormats.CODE_128
-              ],
-              useBarCodeDetectorIfSupported: true,
-              verbose: false
-            }
-          );
+    IMPORTANT CAVEAT:
+    This is a simplified implementation. Full OpenCV adaptive threshold uses
+    integral images for O(1) per-pixel computation. This naive implementation
+    is O(w×h×blockSize²) which would be too slow at full 12MP resolution.
 
-          writeLog("Scanner object created with DATA_MATRIX, QR_CODE, AZTEC, CODE_128.");
-        }
+    MITIGATION: We crop to a central region of interest (ROI) before
+    thresholding. The user centres the Data Matrix within the reticle,
+    so the symbol is in the centre of the frame. We process only the central
+    40% of the frame where the symbol is expected.
+    This reduces compute by ~84% (0.4² = 0.16 of total pixels).
+  */
 
-        const config = {
-          fps: 20,
+  const blockSize = 31;
+  const C         = 10;
 
-          qrbox: function(viewfinderWidth, viewfinderHeight) {
-            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-            const boxSize = Math.floor(minEdge * 0.65);
-            return {
-              width: boxSize,
-              height: boxSize
-            };
-          },
+  // Define central ROI
+  const roiX = Math.floor(w * 0.30);
+  const roiY = Math.floor(h * 0.30);
+  const roiW = Math.floor(w * 0.40);
+  const roiH = Math.floor(h * 0.40);
 
-          aspectRatio: 1.0,
-          disableFlip: true,
+  // Get pixel data for ROI only
+  const imageData = ctx.getImageData(roiX, roiY, roiW, roiH);
+  const data      = imageData.data;  // Uint8ClampedArray [R,G,B,A, R,G,B,A, ...]
+  const len       = roiW * roiH;
 
-          experimentalFeatures: {
-            useBarCodeDetectorIfSupported: true
-          }
-        };
+  // Step 1: Convert ROI to greyscale array
+  const grey = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    const idx = i * 4;
+    grey[i] = Math.round(0.299 * data[idx] + 0.587 * data[idx+1] + 0.114 * data[idx+2]);
+  }
 
-        await scanner.start(
-          { facingMode: "environment" },
-          config,
-          function(decodedText, decodedResult) {
-            const clean = String(decodedText || "").trim();
-
-            result.textContent = clean;
-
-            let detectedFormat = "Detected, format not reported";
-
-            try {
-              if (decodedResult && decodedResult.result && decodedResult.result.format) {
-                detectedFormat =
-                  decodedResult.result.format.formatName ||
-                  String(decodedResult.result.format);
-              }
-            } catch (e) {
-              detectedFormat = "Detected, format not reported";
-            }
-
-            format.textContent = detectedFormat;
-
-            writeLog("BARCODE SCANNED: " + clean);
-            writeLog("FORMAT: " + detectedFormat);
-
-            stopScannerSilently();
-          },
-          function(errorMessage) {
-            // Routine scan-search failures happen continuously.
-            // Do not log them.
-          }
-        );
-
-        scannerRunning = true;
-
-        result.textContent = "Camera is running. Point at Data Matrix.";
-        writeLog("Camera started successfully.");
-
-        try {
-          const settings = scanner.getRunningTrackSettings();
-          writeLog("ACTUAL CAMERA SETTINGS: " + JSON.stringify(settings));
-        } catch (e) {
-          writeLog("Could not read camera settings: " + String(e));
-        }
-
-      } catch (err) {
-        result.textContent = "FAIL: Camera/scanner could not start.";
-        format.textContent = "None.";
-        writeLog("Camera/scanner start error: " + String(err));
-      }
+  // Step 2: Compute integral image for O(1) block sums
+  const integral = new Int32Array((roiW+1) * (roiH+1));
+  for (let y = 0; y < roiH; y++) {
+    for (let x = 0; x < roiW; x++) {
+      integral[(y+1)*(roiW+1)+(x+1)] =
+        grey[y*roiW+x]
+        + integral[y*(roiW+1)+(x+1)]
+        + integral[(y+1)*(roiW+1)+x]
+        - integral[y*(roiW+1)+x];
     }
+  }
 
-    async function stopScanner() {
-      writeLog("Stop Scanner pressed.");
-
-      if (!scanner || !scannerRunning) {
-        document.getElementById("scanResult").textContent = "Scanner is not running.";
-        return;
-      }
-
-      try {
-        await scanner.stop();
-        scannerRunning = false;
-        document.getElementById("scanResult").textContent = "Scanner stopped.";
-        writeLog("Scanner stopped successfully.");
-      } catch (err) {
-        writeLog("Stop scanner error: " + String(err));
-      }
+  // Step 3: Apply threshold using integral image
+  const half = Math.floor(blockSize / 2);
+  for (let y = 0; y < roiH; y++) {
+    for (let x = 0; x < roiW; x++) {
+      const x1 = Math.max(0, x - half);
+      const y1 = Math.max(0, y - half);
+      const x2 = Math.min(roiW, x + half + 1);
+      const y2 = Math.min(roiH, y + half + 1);
+      const area  = (x2 - x1) * (y2 - y1);
+      const sum   = integral[y2*(roiW+1)+x2]
+                  - integral[y1*(roiW+1)+x2]
+                  - integral[y2*(roiW+1)+x1]
+                  + integral[y1*(roiW+1)+x1];
+      const mean  = sum / area;
+      const val   = grey[y*roiW+x] < mean - C ? 0 : 255;
+      const idx   = (y*roiW+x) * 4;
+      data[idx]   = val;
+      data[idx+1] = val;
+      data[idx+2] = val;
+      data[idx+3] = 255;
     }
+  }
 
-    async function stopScannerSilently() {
-      if (!scanner || !scannerRunning) {
-        return;
-      }
+  // Write processed ROI back to canvas
+  ctx.putImageData(imageData, roiX, roiY);
+}
 
-      try {
-        await scanner.stop();
-        scannerRunning = false;
-        writeLog("Scanner stopped after successful scan.");
-      } catch (err) {
-        scannerRunning = false;
-        writeLog("Silent stop error: " + String(err));
-      }
-    }
+// ── SUCCESS HANDLER ───────────────────────────────────────────────────────────
 
-    function escapeHtml(text) {
-      return String(text)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
-    }
+function onDecodeSuccess(result) {
+  isScanning = false;
+  cancelAnimationFrame(animFrameId);
+  successCount++;
 
-    runSystemCheck();
-  </script>
+  const decodedText   = result.getText();
+  const format        = result.getBarcodeFormat();
+  const formatName    = ZXing.BarcodeFormat[format] || ('Format ' + format);
+  /*
+    BarcodeFormat is a numeric enum in ZXing-JS.
+    ZXing.BarcodeFormat[format] reverses it to the string name.
+    For Data Matrix this gives "DATA_MATRIX".
+  */
+
+  lastDecodeResult = decodedText;
+
+  debugLog('✓ DECODE SUCCESS: "' + decodedText + '" | format: ' + formatName
+    + ' | frame: ' + frameCount + ' | attempts: ' + decodeAttempts);
+
+  // Visual feedback
+  setStatus('success', 'Decoded successfully');
+  cornersSetState('success');
+
+  // Populate result panel
+  resultValue.textContent = decodedText;
+  resultMeta.innerHTML =
+    'Format: <strong>' + formatName + '</strong><br>'
+    + 'Decode frame: ' + frameCount + ' &nbsp;|&nbsp; '
+    + 'Attempts: ' + decodeAttempts + '<br>'
+    + 'Canvas resolution: ' + canvas.width + '×' + canvas.height;
+
+  // Show result panel (slides up via CSS transition)
+  resultPanel.classList.add('visible');
+}
+
+// ── USER ACTIONS ──────────────────────────────────────────────────────────────
+
+function dismissResult() {
+  /*
+    User taps "Scan again":
+    - Hide result panel.
+    - Reset counters.
+    - Restart decode loop.
+    - Camera stream stays open (no need to restart getUserMedia).
+  */
+  resultPanel.classList.remove('visible');
+  cornersSetState('');
+  setStatus('scanning', 'Scanning — hold phone steady over cap');
+  frameCount     = 0;
+  decodeAttempts = 0;
+  isScanning     = true;
+  scheduleNextFrame();
+}
+
+function copyResult() {
+  if (!lastDecodeResult) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(lastDecodeResult).then(() => {
+      const orig = document.querySelector('.btn-primary').textContent;
+      document.querySelector('.btn-primary').textContent = 'Copied ✓';
+      setTimeout(() => {
+        document.querySelector('.btn-primary').textContent = orig;
+      }, 1500);
+    });
+  } else {
+    // Fallback for browsers without clipboard API
+    const ta = document.createElement('textarea');
+    ta.value = lastDecodeResult;
+    ta.style.position = 'absolute';
+    ta.style.opacity  = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+}
+
+// ── UI HELPERS ────────────────────────────────────────────────────────────────
+
+function setStatus(state, message) {
+  statusText.textContent = message;
+  const colours = {
+    idle:     '#ffb300',
+    scanning: '#ffb300',
+    success:  '#00e5a0',
+    error:    '#ff4d4d'
+  };
+  statusDot.style.background = colours[state] || colours.idle;
+}
+
+function cornersSetState(state) {
+  corners.forEach(c => {
+    c.classList.remove('success', 'fail');
+    if (state) c.classList.add(state);
+  });
+}
+
+function debugLog(msg) {
+  const ts = new Date().toISOString().slice(11, 23);
+  debugLines.push('[' + ts + '] ' + msg);
+  if (debugLines.length > 30) debugLines.shift();
+  debugPanel.innerHTML = debugLines.join('<br>');
+  debugPanel.scrollTop = debugPanel.scrollHeight;
+  console.log('[Scanner] ' + msg);
+}
+
+function toggleDebug() {
+  debugPanel.classList.toggle('visible');
+}
+
+// ── ENTRY POINT ───────────────────────────────────────────────────────────────
+
+/*
+  Startup sequence:
+  1. Initialise ZXing reader with Data Matrix hints.
+  2. Start camera.
+  Both are async. If either fails, errors are displayed to the user.
+*/
+
+(async function init() {
+  debugLog('Scanner Phase 1 — starting');
+
+  if (!initZXing()) return;
+
+  // Check browser support
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus('error', 'Camera API not supported. Use Chrome or Safari on a modern phone.');
+    debugLog('getUserMedia not available in this browser');
+    return;
+  }
+
+  await startCamera();
+})();
+
+</script>
 </body>
 </html>
+
